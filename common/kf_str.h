@@ -1,5 +1,6 @@
 #pragma once
 
+#include <iosfwd>
 #include <string>
 #include <vector>
 
@@ -85,9 +86,9 @@ public:
 
 	static KfString Format(const wchar_t* const format, ...);
 
-	static std::wstring FormatList(const wchar_t* format, va_list list);
-
 	static std::string FormatList(const char* format, va_list list);
+
+	static std::wstring FormatList(const wchar_t* format, va_list list);
 
 	size_t Find(const char* filter) const;
 
@@ -121,7 +122,7 @@ public:
 
 	char* GetData() const;
 
-	std::string GetUtf8String() const;
+	std::string GetUtf8String();
 
 	std::wstring GetWString() const;
 

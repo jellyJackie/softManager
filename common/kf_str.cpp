@@ -2,11 +2,8 @@
 
 #include <Windows.h>
 #include <cassert>
-#include <variant>
 
 #include "log_helper.h"
-#include "mp.h"
-#include "stringHelper.h"
 
 #if _MSVC_LANG > 201402L
 #include <stringapiset.h>
@@ -21,89 +18,15 @@ std::string w2a(const wchar_t* w)
 	return a;
 }
 
-auto u2a(const char* str) {
-	std::wstring w;
-	auto l = MultiByteToWideChar(CP_UTF8, NULL, str, -1, NULL, NULL);
-	w.resize(l - 1);
-	l = MultiByteToWideChar(CP_UTF8, NULL, str, -1, &w[0], l);
-	l = WideCharToMultiByte(CP_ACP, NULL, w.c_str(), -1, NULL, NULL, NULL, NULL);
-	std::string u;
-	u.resize(l - 1);
-	l = WideCharToMultiByte(CP_ACP, NULL, w.c_str(), -1, &u[0], l, NULL, NULL);
-	return u;
-}
-
-bool IsUtf8Data(const uint8_t* data, size_t size) {
-	bool ansi = true;
-	int32_t byte = 0;
-	for(size_t n = 0; n < size; ++n) {
-		uint8_t ch = *(data + n);
-		if((ch & 0x80) != 0x00) {
-			ansi = false;
-		}
-
-		if(0 == byte) {
-			if(ch >= 0x80) {
-				if(ch >= 0xFC && ch <= 0xFD) {
-					byte = 6;
-				}
-				else if(ch >= 0xF8) {
-					byte = 5;
-				}
-				else if(ch >= 0xF0) {
-					byte = 4;
-				}
-				else if(ch >= 0xE0) {
-					byte = 3;
-				}
-				else if(ch >= 0xC0) {
-					byte = 2;
-				}
-				else {
-					return false;
-				}
-
-				byte--;
-			}
-		}
-		else {
-			if((ch & 0xC0) != 0x80) {
-				return false;
-			}
-
-			byte--;
-		}
-	}
-
-	if(byte > 0 || ansi) {
-		return false;
-	}
-
-	return true;
-}
-
 KfString::KfString() {
 	capacity_ = 1;
-	// value_ = new char[1];
-	value_ = static_cast<char*>(MemoryPool::GetInstance()->Allocate(1));
+	value_ = new char[1];
 	value_[0] = '\0';
 }
 
 KfString::KfString(const char* value, size_t len) {
-	if (IsUtf8Data(reinterpret_cast<const uint8_t*>(value), len)) {
-		const auto data = u2a(value);
-
-		capacity_ = len;
-		// value_ = new char[capacity_];
-		value_ = static_cast<char*>(MemoryPool::GetInstance()->Allocate(capacity_));
-		memset(value_, 0, capacity_);
-		strcpy(value_, data.c_str());
-		return;
-	}
-
 	capacity_ = len;
-	// value_ = new char[capacity_];
-	value_ = static_cast<char*>(MemoryPool::GetInstance()->Allocate(capacity_));
+	value_ = new char[capacity_];
 	memset(value_, 0, capacity_);
 	strcpy(value_, value);
 }
@@ -116,7 +39,7 @@ KfString::KfString(const wchar_t* value) : KfString(w2a(value).c_str()) {
 	
 }
 
-KfString::KfString(const wchar_t* value, size_t len) : KfString(w2a(value).c_str(), wcslen(value) + 1) {
+KfString::KfString(const wchar_t* value, size_t len) : KfString(w2a(value).c_str(), len) {
 
 }
 
@@ -134,20 +57,19 @@ KfString::KfString(KfString&& other) noexcept {
 
 KfString::~KfString() {
 	if (nullptr != value_) {
-		// delete value_;
-		MemoryPool::GetInstance()->DeAllocate(value_);
+		delete value_;
 		value_ = nullptr;
 	}
 }
 
 KfString& KfString::operator=(const char* value) {
 	if (nullptr != value_) {
-		MemoryPool::GetInstance()->DeAllocate(value_);
+		delete value_;
 		value_ = nullptr;
 	}
 
 	capacity_ = strlen(value) + 1;
-	value_ = static_cast<char*>(MemoryPool::GetInstance()->Allocate(capacity_));
+	value_ = new char[capacity_];
 	ZeroMemory(value_, capacity_);
 	strcpy_s(value_, capacity_, value);
 
@@ -169,7 +91,7 @@ KfString& KfString::operator=(const KfString& other) {
 
 KfString& KfString::operator=(KfString&& other) noexcept {
 	if (nullptr != value_) {
-		MemoryPool::GetInstance()->DeAllocate(value_);
+		delete value_;
 		value_ = nullptr;
 	}
 
@@ -292,27 +214,25 @@ KfString& KfString::Trim(char filter) {
 }
 
 KfString& KfString::AppendFormat(const char* const format, ...) {
-	std::unique_ptr<char> value(new char[MAX_PATH]);
-	memset(value.get(), 0, MAX_PATH);
-
 	va_list list;
 	va_start(list, format);
-	vsprintf(value.get(), format, list);
+
+	auto result = FormatList(format, list);
+
 	va_end(list);
 
-	return Append(value.get());
+	return Append(result.data());
 }
 
 KfString& KfString::AppendFormat(const wchar_t* const format, ...) {
-	std::unique_ptr<wchar_t> value(new wchar_t[MAX_PATH]);
-	memset(value.get(), 0, MAX_PATH);
-
 	va_list list;
 	va_start(list, format);
-	vswprintf(value.get(), format, list);
+
+	auto result = FormatList(format, list);
+
 	va_end(list);
 
-	return Append(value.get());
+	return Append(result.data());
 }
 
 KfString& KfString::Append(const char* value) {
@@ -357,314 +277,48 @@ KfString KfString::Format(const char* const format, ...) {
 	va_list list;
 	va_start(list, format);
 
-	const auto result = FormatList(format, list);
+	auto result = FormatList(format, list);
 
 	va_end(list);
 
-	return KfString(result.c_str());
+	return result.data();
 }
 
 KfString KfString::Format(const wchar_t* const format, ...) {
 	va_list list;
 	va_start(list, format);
 
-	const auto result = FormatList(format, list);
+	auto result = FormatList(format, list);
 
 	va_end(list);
 
-	return KfString(result.c_str());
-}
-
-std::wstring FormatLength(const wchar_t* length, std::variant<wchar_t*, double, int> value) {
-	return std::visit([length](auto v) -> std::wstring {
-		using T = std::decay_t<decltype(v)>;
-
-		auto f = std::wstring(L"%") + length;
-
-		wchar_t buffer[MAX_PATH];
-		ZeroMemory(buffer, MAX_PATH);
-
-		if constexpr (std::is_same_v<T, wchar_t*>) {
-			f += L"s";
-			std::ignore = wsprintf(buffer, f.c_str(), v);
-		}
-		else if constexpr (std::is_same_v<T, double>) {
-			f += L"lf";
-			char data[MAX_PATH];
-			ZeroMemory(data, MAX_PATH);
-			std::ignore = sprintf_s(data, CStringHelper::w2a(f).c_str(), v);
-			wcscpy_s(buffer, CStringHelper::a2w(data).c_str());
-		}
-		else if constexpr (std::is_same_v<T, int>) {
-			f += L"d";
-			std::ignore = wsprintf(buffer, f.c_str(), v);
-		}
-		else {
-			static_assert(false);
-		}
-
-		return buffer;
-	}, value);
-}
-
-std::wstring KfString::FormatList(const wchar_t* format, va_list list) {
-	std::wstring result;
-
-	int index = 0;
-	std::wstring length;
-
-	while (true) {
-		const auto c = format[index];
-
-		if (c == '\0') {
-			break;
-		}
-
-		if (c == '%') {
-			auto next = format[index + 1];
-
-			length.clear();
-
-			while ((next >= '0' && next <= '9') || next == '.') {
-				length += next;
-				index++;
-				next = format[index + 1];
-			}
-
-			if (next == '%') {
-				result += '%';
-				index++;
-			}
-			else if (next == 'd') {
-				const auto value = va_arg(list, int);
-
-				if (length.empty()) {
-					result += std::to_wstring(value);
-				}
-				else {
-					result += FormatLength(length.c_str(), value);
-				}
-
-				index++;
-			}
-			else if (next == 's') {
-				const auto value = va_arg(list, wchar_t*);
-
-				if (length.empty()) {
-					result += value;
-				}
-				else {
-					result += FormatLength(length.c_str(), value);
-				}
-
-				index++;
-			}
-			else if (next == 'f') {
-				const auto value = va_arg(list, double);
-				result += std::to_wstring(value);
-				index++;
-			}
-			else if (next == 'c') {
-				const auto value = va_arg(list, wchar_t);
-				result += value;
-				index++;
-			}
-			else if (next == 'l') {
-				const auto next2 = format[index + 2];
-
-				if (next2 == 'd') {
-					const auto value = va_arg(list, long);
-					result += std::to_wstring(value);
-					index += 2;
-				}
-				else if (next2 == 'f') {
-					const auto value = va_arg(list, double);
-
-					if (length.empty()) {
-						result += std::to_wstring(value);
-					}
-					else {
-						result += FormatLength(length.c_str(), value);
-					}
-
-					index += 2;
-				}
-				else if (next2 == 'l') {
-					const auto next3 = format[index + 3];
-
-					if (next3 == 'd') {
-						const auto value = va_arg(list, long long);
-						result += std::to_wstring(value);
-						index += 3;
-					}
-					else {
-						assert(false);
-					}
-				}
-				else {
-					assert(false);
-				}
-			}
-			else {
-				assert(false);
-			}
-		}
-		else {
-			result += c;
-		}
-
-		index++;
-	}
-
-	return result;
-}
-
-std::string FormatLength(const char* length, std::variant<char*, double, int> value) {
-	return std::visit([length](auto v) -> std::string {
-		using T = std::decay_t<decltype(v)>;
-
-		auto f = std::string("%") + length;
-
-		char buffer[MAX_PATH];
-		ZeroMemory(buffer, MAX_PATH);
-
-		if constexpr (std::is_same_v<T, char*>) {
-			f += "s";
-			std::ignore = sprintf_s(buffer, MAX_PATH, f.c_str(), v);
-		}
-		else if constexpr (std::is_same_v<T, double>) {
-			f += "lf";
-			std::ignore = sprintf_s(buffer, MAX_PATH, f.c_str(), v);
-		}
-		else if constexpr (std::is_same_v<T, int>) {
-			f += "d";
-			std::ignore = sprintf_s(buffer, MAX_PATH, f.c_str(), v);
-		}
-		else {
-			static_assert(false);
-		}
-
-		return buffer;
-	}, value);
+	return result.data();
 }
 
 std::string KfString::FormatList(const char* format, va_list list) {
-	std::string result;
-	int index = 0;
-
-	std::string length;
-
-	while (true) {
-		const auto c = format[index];
-
-		if (c == '\0') {
-			break;
-		}
-
-		if (c == '%') {
-			auto next = format[index + 1];
-
-			length.clear();
-
-			while((next >= '0' && next <= '9') || next == '.') {
-				length += next;
-				index++;
-				next = format[index + 1];
-			}
-
-			if (next == '%') {
-				result += '%';
-				index++;
-			}
-			else if (next == 'd') {
-				const auto value = va_arg(list, int);
-
-				if (length.empty()) {
-					result += std::to_string(value);
-				}
-				else {
-					result += FormatLength(length.c_str(), value);
-				}
-
-				index++;
-			}
-			else if (next == 's') {
-				const auto value = va_arg(list, char*);
-
-				if (length.empty()) {
-					result += value;
-				}
-				else {
-					result += FormatLength(length.c_str(), value);
-				}
-
-				index++;
-			}
-			else if (next == 'f') {
-				const auto value = va_arg(list, double);
-
-				if (length.empty()) {
-					result += std::to_string(value);
-				}
-				else {
-					result += FormatLength(length.c_str(), value);
-				}
-
-				index++;
-			}
-			else if (next == 'c') {
-				const auto value = va_arg(list, char);
-				result += value;
-				index++;
-			}
-			else if (next == 'l') {
-				const auto next2 = format[index + 2];
-
-				if (next2 == 'd') {
-					const auto value = va_arg(list, long);
-					result += std::to_string(value);
-					index += 2;
-				}
-				else if (next2 == 'f') {
-					const auto value = va_arg(list, double);
-
-					if(length.empty()) {
-						result += std::to_string(value);
-					}
-					else {
-						result += FormatLength(length.c_str(), value);
-					}
-
-					index += 2;
-				}
-				else if (next2 == 'l') {
-					const auto next3 = format[index + 3];
-
-					if (next3 == 'd') {
-						const auto value = va_arg(list, long long);
-						result += std::to_string(value);
-						index += 3;
-					}
-					else {
-						assert(false);
-					}
-				}
-				else {
-					assert(false);
-				}
-			}
-			else {
-				assert(false);
-			}
-		}
-		else {
-			result += c;
-		}
-
-		index++;
+	int length = _vscprintf(format, list);
+	if (-1 == length) {
+		return "";
 	}
 
-	return result;
+	std::unique_ptr<char> buffer(new char[length + 1]);
+	memset(buffer.get(), 0, length + 1);
+	_vsnprintf_s(buffer.get(), length + 1, length + 1, format, list);
+
+	return buffer.get();
+}
+
+std::wstring KfString::FormatList(const wchar_t* format, va_list list) {
+	int length = _vscwprintf(format, list);
+	if(-1 == length) {
+		return L"";
+	}
+
+	std::unique_ptr<wchar_t> buffer(new wchar_t[length + 1]);
+	memset(buffer.get(), 0, (length + 1) * sizeof(wchar_t));
+	_vsnwprintf_s(buffer.get(), length + 1, length + 1, format, list);
+
+	return buffer.get();
 }
 
 size_t KfString::Find(const char* filter) const {
@@ -713,7 +367,7 @@ size_t KfString::ReverseFind(const char* filter) const {
 
 	const auto value_len = strlen(value_);
 
-	for (size_t n = value_len - filter_len; n >= 0; --n) {
+	for (auto n = static_cast<int>(value_len - filter_len); n >= 0; --n) {
 		if (0 == strncmp(value_ + n, filter, filter_len)) {
 			return n;
 		}
@@ -727,9 +381,10 @@ size_t KfString::ReverseFind(const wchar_t* filter) const {
 }
 
 size_t KfString::ReverseFind(char filter) const {
-	assert(strlen(value_) > 0);
+	const auto data_len = static_cast<int>(strlen(value_));
+	assert(data_len > 0);
 
-	for (int n = strlen(value_) - 1; n >= 0; --n) {
+	for (auto n = data_len - 1; n >= 0; --n) {
 		if (value_[n] == filter) {
 			return n;
 		}
@@ -739,7 +394,7 @@ size_t KfString::ReverseFind(char filter) const {
 }
 
 KfString KfString::SubStr(int start_pos, size_t length) const {
-	const auto data_len = strlen(value_);
+	const auto data_len = static_cast<int>(strlen(value_));
 	assert(start_pos >= 0 && start_pos <= data_len);
 
 	if(start_pos + length > data_len || length == std::string::npos) {
@@ -747,7 +402,7 @@ KfString KfString::SubStr(int start_pos, size_t length) const {
 			return "";
 		}
 
-		std::unique_ptr<char> data(new char[data_len - start_pos + 1]);
+		const std::unique_ptr<char> data(new char[data_len - start_pos + 1]);
 		memset(data.get(), 0, data_len - start_pos + 1);
 
 		strcpy(data.get(), value_ + start_pos);
@@ -760,7 +415,7 @@ KfString KfString::SubStr(int start_pos, size_t length) const {
 
 	strncpy(data.get(), value_ + start_pos, length);
 
-	return KfString(data.get());
+	return data.get();
 }
 
 KfString KfString::Left(int length) const {
@@ -809,7 +464,7 @@ uint32_t KfString::GetCapacity() const {
 }
 
 bool KfString::IsEmpty() const {
-	return value_ == 0;
+	return value_ == nullptr;
 }
 
 const char* KfString::GetString() const {
@@ -820,12 +475,12 @@ char* KfString::GetData() const {
 	return value_;
 }
 
-std::string KfString::GetUtf8String() const {
-	auto a2u = [](const std::string & str) {
+std::string KfString::GetUtf8String() {
+	auto a2u = [](char* & str) {
 		std::wstring w;
-		auto l = MultiByteToWideChar(CP_ACP, NULL, str.c_str(), -1, NULL, NULL);
+		auto l = MultiByteToWideChar(CP_ACP, NULL, str, -1, NULL, NULL);
 		w.resize(l - 1);
-		l = MultiByteToWideChar(CP_ACP, NULL, str.c_str(), -1, &w[0], l);
+		l = MultiByteToWideChar(CP_ACP, NULL, str, -1, &w[0], l);
 		l = WideCharToMultiByte(CP_UTF8, NULL, w.c_str(), -1, NULL, NULL, NULL, NULL);
 		std::string u;
 		u.resize(l - 1);
@@ -837,11 +492,11 @@ std::string KfString::GetUtf8String() const {
 }
 
 std::wstring KfString::GetWString() const {
-	auto a2w = [](const std::string& str) {
+	auto a2w = [](const char* str) {
 		std::wstring w;
-		auto l = MultiByteToWideChar(CP_ACP, NULL, str.c_str(), -1, NULL, NULL);
+		auto l = MultiByteToWideChar(CP_ACP, 0, str, -1, nullptr, 0);
 		w.resize(l - 1);
-		l = MultiByteToWideChar(CP_ACP, NULL, str.c_str(), -1, &w[0], l);
+		l = MultiByteToWideChar(CP_ACP, 0, str, -1, &w[0], l);
 		return w;
 	};
 
@@ -854,7 +509,7 @@ std::vector<KfString> KfString::Split(const char* filter) const {
 	KfString temp{ value_ };
 
 	char* data = strtok(temp.value_, filter);
-	while(data != 0) {
+	while(data != '\0') {
 		result.emplace_back(data);
 		data = strtok(nullptr, filter);
 	}
@@ -874,10 +529,9 @@ void KfString::Reallocate(size_t size) {
 
 	capacity_ = size;
 
-	// value_ = new char[capacity_];
-	value_ = static_cast<char*>(MemoryPool::GetInstance()->Allocate(capacity_));
+	value_ = new char[capacity_];
 	ZeroMemory(value_, capacity_);
-	strcpy(value_, temp);
+	strcpy_s(value_, capacity_, temp);
 }
 
 KfString operator+(const char* value, const KfString& other) {
@@ -935,8 +589,4 @@ void KfStringTest() {
 	assert(hello.Left(3) == "012");
 
 	assert(hello.Replace("3", "e") == "012e45678");
-
-	const auto value = KfString::Format(L"%0.2lf", 5.0 / 8.0);
-
-	assert(value == L"0.62");
 }

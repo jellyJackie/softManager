@@ -4,7 +4,6 @@
 #include "log_helper.h"
 #include "mail.h"
 #include "mainWindow.h"
-#include "mp.h"
 #include "resource.h"
 #include "track.h"
 
@@ -37,8 +36,6 @@ int WINAPI wWinMain(__in HINSTANCE hInstance, __in_opt HINSTANCE hPrevInstance,
 	wcscat_s(bak_path, L".bak");
 
 	DeleteFile(bak_path);
-
-	MemoryPool::GetInstance()->Init(30);
 
 	Helper::CreateDesktopIcon(L"软件升级管理");
 

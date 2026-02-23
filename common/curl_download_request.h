@@ -40,6 +40,8 @@ public:
 	double GetContentLength(bool* accept_ranges, std::wstring* ptr_file_name,
 							int retry_count = 3) const;
 
+	void MultipleDownloadFile(FILE* file, double content_length, uint16_t thread_count);
+
 	// 多线程下载
 	long DownloadFile(double content_length, std::wstring_view target_file_path, unsigned thread_count);
 

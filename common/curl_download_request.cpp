@@ -10,6 +10,7 @@
 #include "kf_str.h"
 #include "request_helper.h"
 #include "stringHelper.h"
+#include "threadpool.h"
 
 void CurlDownloadRequest::SetUrl(const char* url) {
 	if (nullptr == StrStrIA(url, "http")) {
@@ -154,6 +155,10 @@ double CurlDownloadRequest::GetContentLength(bool* accept_ranges,
 
 	curl_easy_setopt(curl_guard.get(), CURLOPT_FOLLOWLOCATION, 1L);
 
+	// 在设置其他 curl 选项的地方，添加这一行
+	curl_easy_setopt(curl_guard.get(), CURLOPT_USERAGENT,
+					 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+
 	const auto header_data = std::make_shared<HeaderData>();
 
 	curl_easy_setopt(curl_guard.get(), CURLOPT_HEADER, 1L);
@@ -199,24 +204,10 @@ std::map<int, uint64_t> download_map_;
 
 int download_index = 0;
 
-long CurlDownloadRequest::DownloadFile(double content_length, std::wstring_view target_file_path, 
-									   unsigned thread_count) {
-	// 重置状态值
-	stop_download_ = false;
-	download_result_code_ = CURLE_OK;
-	download_map_.clear();
-
-	if(PathFileExists(target_file_path.data())) {
-		DeleteFile(target_file_path.data());
-	}
-
-	FILE* file = _wfopen(target_file_path.data(), L"wb");
-	if (nullptr == file) {
-		KF_WARN(L"failed open file: %s", target_file_path.data());
-		return -1;
-	}
-
-	std::vector<std::thread> download_threads;
+void CurlDownloadRequest::MultipleDownloadFile(FILE* file,
+											   double content_length,
+											   uint16_t thread_count) {
+	std::threadpool executor;
 
 	for (unsigned n = 0; n < thread_count; ++n) {
 		auto node = new DownloadNode;
@@ -232,7 +223,8 @@ long CurlDownloadRequest::DownloadFile(double content_length, std::wstring_view 
 			node->end_pos = content_length;
 		}
 
-		KF_INFO("thread: %d, start: %lld, end: %lld, size: %s", n + 1, node->start_pos, node->end_pos,
+		KF_INFO("thread: %d, start: %lld, end: %lld, size: %s",
+				n + 1, node->start_pos, node->end_pos,
 				Helper::ToStringSize(node->end_pos - node->start_pos).c_str());
 
 		auto curl = curl_easy_init();
@@ -252,6 +244,10 @@ long CurlDownloadRequest::DownloadFile(double content_length, std::wstring_view 
 
 		curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
 
+		// 在设置其他 curl 选项的地方，添加这一行
+		curl_easy_setopt(curl, CURLOPT_USERAGENT,
+						 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+
 		std::string range;
 		range.append(std::to_string(node->start_pos));
 		range.append("-");
@@ -266,20 +262,34 @@ long CurlDownloadRequest::DownloadFile(double content_length, std::wstring_view 
 		curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, node);
 		curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, ProgressFunction);
 
-		std::thread download_thread([this, node] {
+		auto buffer = KfString::Format(L"多线程下载 %d", n + 1).GetWString();
+
+		executor.commit(buffer.c_str(), [this, node] {
 			Download(node);
+			return 0;
 		});
+	}
+}
 
-		download_threads.emplace_back(std::move(download_thread));
+long CurlDownloadRequest::DownloadFile(double content_length,
+									   std::wstring_view target_file_path, 
+									   unsigned thread_count) {
+	// 重置状态值
+	stop_download_ = false;
+	download_result_code_ = CURLE_OK;
+	download_map_.clear();
+
+	if(PathFileExists(target_file_path.data())) {
+		DeleteFile(target_file_path.data());
 	}
 
-	for(auto& it : download_threads) {
-		if(!it.joinable()) {
-			continue;
-		}
-
-		it.join();
+	FILE* file = _wfopen(target_file_path.data(), L"wb");
+	if (nullptr == file) {
+		KF_WARN(L"failed open file: %s", target_file_path.data());
+		return -1;
 	}
+
+	MultipleDownloadFile(file, content_length, thread_count);
 
 	std::ignore = fclose(file);
 
@@ -310,6 +320,7 @@ bool CurlDownloadRequest::DownloadSingleThreadFile(const wchar_t* target_file_pa
 	download_result_code_ = CURLE_OK;
 	download_map_.clear();
 
+	// 如果文件存在则删除
 	if (PathFileExists(target_file_path)) {
 		DeleteFile(target_file_path);
 	}
@@ -320,60 +331,95 @@ bool CurlDownloadRequest::DownloadSingleThreadFile(const wchar_t* target_file_pa
 		return false;
 	}
 
-	single_curl_ = curl_easy_init();
+	CURLcode code = CURLE_OK;
+	long http_code = 0;
+	bool success = false;
 
+	// 初始化 curl
+	single_curl_ = curl_easy_init();
+	if (!single_curl_) {
+		fclose(file);
+		KF_WARN("failed init curl");
+		return false;
+	}
+
+	// 设置 curl 选项
 	curl_easy_setopt(single_curl_, CURLOPT_URL, url_.c_str());
 
-	// 如果在5秒内低于1个字节/秒，则终止
+	// 超时设置
 	curl_easy_setopt(single_curl_, CURLOPT_LOW_SPEED_TIME, 60L);
 	curl_easy_setopt(single_curl_, CURLOPT_LOW_SPEED_LIMIT, 30L);
+	curl_easy_setopt(single_curl_, CURLOPT_CONNECTTIMEOUT, 30L);  // 连接超时
 
+	// SSL 设置
 	curl_easy_setopt(single_curl_, CURLOPT_SSL_VERIFYPEER, 0);
 	curl_easy_setopt(single_curl_, CURLOPT_SSL_VERIFYHOST, 0);
 
+	// 重定向设置
 	curl_easy_setopt(single_curl_, CURLOPT_FOLLOWLOCATION, 1L);
 
+	// 在设置其他 curl 选项的地方，添加这一行
+	curl_easy_setopt(single_curl_, CURLOPT_USERAGENT,
+					 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+
+	// 写入回调
 	curl_easy_setopt(single_curl_, CURLOPT_WRITEDATA, file);
 	curl_easy_setopt(single_curl_, CURLOPT_WRITEFUNCTION,
 					 WriteSingleThreadDownloadFunction);
 
+	// 进度回调
 	curl_easy_setopt(single_curl_, CURLOPT_NOPROGRESS, 0L);
 	curl_easy_setopt(single_curl_, CURLOPT_XFERINFODATA, this);
 	curl_easy_setopt(single_curl_, CURLOPT_XFERINFOFUNCTION,
 					 SingleProcessProgressFunction);
 
-	const auto code = curl_easy_perform(single_curl_);
+	// 执行下载
+	code = curl_easy_perform(single_curl_);
 
-	std::ignore = fclose(file);
+	// 获取 HTTP 状态码
+	curl_easy_getinfo(single_curl_, CURLINFO_RESPONSE_CODE, &http_code);
 
-	if(stop_download_) {
+	// 关闭文件
+	fclose(file);
+
+	// 检查是否用户取消
+	if (stop_download_) {
+		if (single_curl_) {
+			curl_easy_cleanup(single_curl_);
+			single_curl_ = nullptr;
+		}
 		return false;
 	}
 
-	curl_easy_cleanup(single_curl_);
+	// 清理 curl
+	if (single_curl_) {
+		curl_easy_cleanup(single_curl_);
+		single_curl_ = nullptr;
+	}
 
+	// 处理结果
 	if (CURLE_OK == code) {
 		if (nullptr != download_finished_callback_) {
 			if (download_result_code_ == CURLE_ABORTED_BY_CALLBACK ||
 				download_result_code_ == CURLE_BAD_FUNCTION_ARGUMENT) {
-				// 取消下载
 				KF_INFO("cancel download, url: %s, code: %d", url_.c_str(), code);
-				return code == CURLE_OK;
+				return true;  // 这里返回 true 合适吗？根据业务逻辑判断
 			}
 
 			download_finished_callback_(download_finished_callback_data_,
 										download_finished_callback_sign_.c_str(),
-										target_file_path, code, 200);
+										target_file_path, code, http_code);
 		}
 
 		KF_INFO("success download, url: %s", url_.c_str());
 		return true;
 	}
 
+	// 下载失败
 	if (nullptr != download_finished_callback_) {
 		download_finished_callback_(download_finished_callback_data_,
 									download_finished_callback_sign_.c_str(),
-									target_file_path, code, 200);
+									target_file_path, code, http_code);
 	}
 
 	KF_WARN("failed download, url: %s, code: %d", url_.c_str(), code);
