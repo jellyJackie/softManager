@@ -185,10 +185,10 @@ void CGlobalUpdateManager::HandlerRemoteResponse(const char* response_body,
 
 	handle_count_ += size;
 
-	auto buffer = KfString::Format(L"正在检查软件更新[%d/%d]",
-								   handle_count_, soft_count);
+	wchar_t buffer[128] = { 0 };
+	swprintf_s(buffer, L"正在检查软件更新[%d/%d]", handle_count_, soft_count);
 
-	Helper::UpdateStatusLabel(buffer.GetWString().c_str());
+	Helper::UpdateStatusLabel(buffer);
 
 	for (size_t n = 0; n < size; ++n) {
 		std::string remote_version;

@@ -262,9 +262,10 @@ void CurlDownloadRequest::MultipleDownloadFile(FILE* file,
 		curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, node);
 		curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, ProgressFunction);
 
-		auto buffer = KfString::Format(L"多线程下载 %d", n + 1).GetWString();
+		wchar_t buffer[64] = { 0 };
+		swprintf_s(buffer, L"多线程下载 %d", n + 1);
 
-		executor.commit(buffer.c_str(), [this, node] {
+		executor.commit(buffer, [this, node] {
 			Download(node);
 			return 0;
 		});
@@ -556,6 +557,12 @@ void CurlDownloadRequest::Download(DownloadNode* node) {
 	uint8_t retries = 1;
 
 	while (CURLE_OK != download_result_code_) {
+		if (retries > 3) {
+			KF_INFO("max retry count reached, aborting download index: %d",
+					node->index);
+			break;
+		}
+
 		KF_INFO("retry download thread: %d, start: %lld, end: %lld, size: %s, retry count: %d",
 				node->index, node->start_pos, node->end_pos,
 				Helper::ToStringSize(node->end_pos - node->start_pos).c_str(), retries++);

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <string_view>
+#include <string>
 #include <curl/curl.h>
 
 class HeaderData;

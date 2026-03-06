@@ -107,9 +107,10 @@ void CMainWindow::Init()
 
 	auto file_version = FileHelper::GetFileVersion(file_name);
 
-	auto title = KfString::Format(L"软件更新助手(%s)", file_version.c_str());
+	wchar_t title[128] = { 0 };
+	swprintf_s(title, L"软件更新助手(%s)", file_version.c_str());
 
-	m_pm.FindControl(L"soft_name_label")->SetText(title.GetWString().c_str());
+	m_pm.FindControl(L"soft_name_label")->SetText(title);
 
 	HANDLE hThread = CreateThread(nullptr, 0, ThreadGetUpdateInfo, this, 0, nullptr);
 	CloseHandle(hThread);

@@ -1,7 +1,7 @@
 #pragma once
 
 #include <memory>
-#include <string_view>
+#include <string>
 #include <thread>
 #include <curl/curl.h>
 

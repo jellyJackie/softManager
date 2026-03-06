@@ -60,5 +60,5 @@ bool RequestHelper::Report(ReportType type, const wchar_t* comment) {
 }
 
 std::string RequestHelper::GetHost() {
-	return KfString::Format("%s:5443", ip_).GetString();
+	return KfString::Format("%s:5443", ip_.c_str()).GetString();
 }

@@ -101,7 +101,7 @@ namespace std
 
 		int taskCount() { return _tasks.size(); }
 
-		std::wstring ToString() {
+			std::wstring ToString() {
 			std::wstring buffer = L"[";
 
 			for (auto& it : _pool) {
@@ -115,11 +115,10 @@ namespace std
 
 				std::hash<std::thread::id> hasher;
 
-				auto buff = KfString::Format(L"0x%lx %s",
-											 hasher(std::get<1>(it).get_id()),
-											 std::get<0>(it).c_str());
+				wchar_t temp[256] = { 0 };
+				swprintf_s(temp, L"0x%lx %ls", hasher(std::get<1>(it).get_id()), std::get<0>(it).c_str());
 
-				buffer.append(buff.GetWString());
+				buffer.append(temp);
 			}
 
 			buffer.append(L"]");
@@ -174,7 +173,7 @@ namespace std
 						}
 						task();//执行任务
 
-						KF_INFO(L"execute finished task, task count: %d, idle count: %d, thread running info: %s",
+						KF_INFO(L"execute finished task, task count: %d, idle count: %d, thread running info: %ls",
 								_tasks.size(), idlCount(), ToString().c_str());
 	#ifdef THREADPOOL_AUTO_GROW
 						if (_idlThrNum>0 && _pool.size() > _initSize) //支持自动释放空闲线程,避免峰值过后大量空闲线程

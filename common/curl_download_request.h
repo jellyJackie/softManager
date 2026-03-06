@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <string>
 #include <curl/curl.h>
 
 typedef std::function<int(void*, const char*, double, double, int, long long, long long)> ptrDownloadProgressFunction;
